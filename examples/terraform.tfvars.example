@@ -1,0 +1,3 @@
+bicc_host     = "yourinstance.fa.us2.oraclecloud.com"
+bicc_username = "your-username"
+bicc_password = "your-password"
