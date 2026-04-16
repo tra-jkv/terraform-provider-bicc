@@ -12,6 +12,14 @@ import (
 	"github.com/tra-jkv/terraform-provider-bicc/bicc/client"
 )
 
+// dataStoreHash hashes a data_stores block on its data_store_key so that
+// TypeSet treats the set as unordered — reordering data_stores in config or
+// API response will no longer produce a spurious diff.
+func dataStoreHash(v interface{}) int {
+	m := v.(map[string]interface{})
+	return schema.HashString(m["data_store_key"].(string))
+}
+
 func resourceBICCJob() *schema.Resource {
 	return &schema.Resource{
 		CreateContext: resourceBICCJobCreate,
@@ -33,9 +41,10 @@ func resourceBICCJob() *schema.Resource {
 				Description: "Description of the BICC job",
 			},
 			"data_stores": {
-				Type:        schema.TypeList,
+				Type:        schema.TypeSet,
 				Required:    true,
-				Description: "List of data stores to extract",
+				Description: "Set of data stores to extract (order-independent, keyed by data_store_key)",
+				Set:         dataStoreHash,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"data_store_key": {
@@ -243,30 +252,42 @@ func resourceBICCJobRead(ctx context.Context, d *schema.ResourceData, meta inter
 	d.Set("name", job.Name)
 	d.Set("description", job.Description)
 
-	// Set data stores
-	dataStores := make([]interface{}, len(job.DataStores))
+	// Build a lookup map from the existing state set so we can retrieve
+	// config-only fields (auto_populate_all_columns, column_overrides) by
+	// data_store_key rather than by index.
+	oldSet := d.Get("data_stores").(*schema.Set)
+	oldByKey := make(map[string]map[string]interface{}, oldSet.Len())
+	for _, raw := range oldSet.List() {
+		if oldDS, ok := raw.(map[string]interface{}); ok {
+			if key, ok := oldDS["data_store_key"].(string); ok {
+				oldByKey[key] = oldDS
+			}
+		}
+	}
 
-	// Get existing config data_stores to preserve auto_populate_all_columns
-	oldDataStores := d.Get("data_stores").([]interface{})
+	// Build the new set of data store maps from the API response.
+	dataStores := make([]interface{}, len(job.DataStores))
 
 	for i, ds := range job.DataStores {
 		dataStore := make(map[string]interface{})
-		dataStore["data_store_key"] = ds.DataStoreMeta.DataStoreKey
+		key := ds.DataStoreMeta.DataStoreKey
+		dataStore["data_store_key"] = key
 		dataStore["filters"] = ds.DataStoreMeta.Filters
 		dataStore["is_silent_error"] = ds.DataStoreMeta.IsSilentError
 		dataStore["is_effective_date_disabled"] = ds.DataStoreMeta.IsEffectiveDateDisabled
 		dataStore["use_union_for_incremental"] = ds.DataStoreMeta.UseUnionForIncremental
 
-		// Preserve auto_populate_all_columns from config
+		// Preserve config-only fields by looking up the old entry by key.
 		autoPopulateEnabled := false
-		if i < len(oldDataStores) {
-			if oldDS, ok := oldDataStores[i].(map[string]interface{}); ok {
-				if autoPopulate, exists := oldDS["auto_populate_all_columns"]; exists {
-					dataStore["auto_populate_all_columns"] = autoPopulate
-					if autoPop, ok := autoPopulate.(bool); ok {
-						autoPopulateEnabled = autoPop
-					}
+		if oldDS, exists := oldByKey[key]; exists {
+			if autoPopulate, ok := oldDS["auto_populate_all_columns"]; ok {
+				dataStore["auto_populate_all_columns"] = autoPopulate
+				if autoPop, ok := autoPopulate.(bool); ok {
+					autoPopulateEnabled = autoPop
 				}
+			}
+			if columnOverrides, ok := oldDS["column_overrides"]; ok {
+				dataStore["column_overrides"] = columnOverrides
 			}
 		}
 
@@ -288,24 +309,15 @@ func resourceBICCJobRead(ctx context.Context, d *schema.ResourceData, meta inter
 		dataStore["chunk_date_seq_min"] = ds.DataStoreMeta.ChunkDateSeqMin
 		dataStore["chunk_pk_seq_incr"] = ds.DataStoreMeta.ChunkPkSeqIncr
 
-		// Preserve column_overrides from config
-		if i < len(oldDataStores) {
-			if oldDS, ok := oldDataStores[i].(map[string]interface{}); ok {
-				if columnOverrides, exists := oldDS["column_overrides"]; exists {
-					dataStore["column_overrides"] = columnOverrides
-				}
-			}
-		}
-
 		// When auto-populate is enabled, don't store columns in state
-		// This prevents drift from API-returned columns
+		// to avoid drift from API-returned column lists.
 		if autoPopulateEnabled {
 			dataStore["columns"] = []interface{}{}
 			dataStores[i] = dataStore
 			continue
 		}
 
-		// Set columns (from API response) only when NOT using auto_populate_all_columns
+		// Set columns from API response only when NOT using auto_populate_all_columns.
 		columns := make([]interface{}, 0)
 		for _, col := range ds.DataStoreMeta.Columns {
 			column := make(map[string]interface{})
@@ -368,7 +380,8 @@ func buildJobFromResourceData(d *schema.ResourceData, c *client.Client) *client.
 		Schedules:   nil,
 	}
 
-	dataStoresData := d.Get("data_stores").([]interface{})
+	dataStoresSet := d.Get("data_stores").(*schema.Set)
+	dataStoresData := dataStoresSet.List()
 	dataStores := make([]client.DataStore, len(dataStoresData))
 
 	for i, dsData := range dataStoresData {
