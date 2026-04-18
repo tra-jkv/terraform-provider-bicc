@@ -9,211 +9,218 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/tra-jkv/terraform-provider-bicc/bicc/client"
 )
 
-func resourceBICCJobBackfill() *schema.Resource {
-	return &schema.Resource{
-		CreateContext: resourceBICCJobBackfillCreate,
-		ReadContext:   resourceBICCJobBackfillRead,
-		UpdateContext: resourceBICCJobBackfillUpdate,
-		DeleteContext: resourceBICCJobBackfillDelete,
-		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
-		},
-		Schema: map[string]*schema.Schema{
-			"job_id": {
-				Type:        schema.TypeString,
-				Required:    true,
-				ForceNew:    true,
-				Description: "The ID of the BICC job to backfill",
+var _ resource.Resource = &biccJobBackfillResource{}
+
+type biccJobBackfillModel struct {
+	ID        types.String `tfsdk:"id"`
+	JobID     types.String `tfsdk:"job_id"`
+	Backfills types.Set    `tfsdk:"backfills"`
+}
+
+type backfillEntryModel struct {
+	DataStoreKey    types.String `tfsdk:"data_store_key"`
+	LastExtractDate types.String `tfsdk:"last_extract_date"`
+}
+
+var backfillEntryAttrTypes = map[string]attr.Type{
+	"data_store_key":    types.StringType,
+	"last_extract_date": types.StringType,
+}
+
+type biccJobBackfillResource struct {
+	client *client.Client
+}
+
+func NewBICCJobBackfillResource() resource.Resource {
+	return &biccJobBackfillResource{}
+}
+
+func (r *biccJobBackfillResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_job_backfill"
+}
+
+func (r *biccJobBackfillResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "Sets a last_extract_date on one or more data stores within a BICC job to trigger a backfill. " +
+			"The BICC API accepts this field but does not return it, so this resource uses a no-op Read. " +
+			"Destroy this resource once the backfill job run completes — BICC then manages the cursor itself.",
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed:    true,
+				Description: "Stable resource ID derived from job_id and data_store_keys.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
-			"backfills": {
-				Type:        schema.TypeSet,
+			"job_id": schema.StringAttribute{
 				Required:    true,
-				Description: "Set of backfill configurations for data stores",
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
-						"data_store_key": {
-							Type:        schema.TypeString,
+				Description: "The ID of the BICC job to backfill.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"backfills": schema.SetNestedAttribute{
+				Required:    true,
+				Description: "Set of data store backfill configurations.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"data_store_key": schema.StringAttribute{
 							Required:    true,
-							Description: "The data store key to backfill (e.g., 'FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO')",
+							Description: "The data store key to backfill.",
 						},
-						"last_extract_date": {
-							Type:        schema.TypeString,
+						"last_extract_date": schema.StringAttribute{
 							Required:    true,
-							Description: "The last extract date for backfilling (format: YYYY-MM-DD)",
+							Description: "The last extract date for backfilling (format: YYYY-MM-DD).",
 						},
 					},
-				},
-				Set: func(v interface{}) int {
-					// Hash based on both data_store_key and last_extract_date
-					m := v.(map[string]interface{})
-					key := m["data_store_key"].(string)
-					date := m["last_extract_date"].(string)
-					return schema.HashString(key + "|" + date)
 				},
 			},
 		},
 	}
 }
 
-func resourceBICCJobBackfillCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	c := meta.(*client.Client)
-	var diags diag.Diagnostics
+func (r *biccJobBackfillResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	c, ok := req.ProviderData.(*client.Client)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *client.Client, got %T", req.ProviderData))
+		return
+	}
+	r.client = c
+}
 
-	jobID, err := strconv.ParseInt(d.Get("job_id").(string), 10, 64)
-	if err != nil {
-		return diag.FromErr(fmt.Errorf("invalid job_id: %v", err))
+func (r *biccJobBackfillResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan biccJobBackfillModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	backfills := d.Get("backfills").(*schema.Set).List()
-
-	// Get the existing job
-	job, err := c.GetJob(jobID)
+	jobID, err := strconv.ParseInt(plan.JobID.ValueString(), 10, 64)
 	if err != nil {
-		return diag.FromErr(fmt.Errorf("failed to get job: %v", err))
+		resp.Diagnostics.AddError("Invalid job_id", err.Error())
+		return
 	}
 
-	// Apply each backfill
-	for _, bf := range backfills {
-		backfillMap := bf.(map[string]interface{})
-		dataStoreKey := backfillMap["data_store_key"].(string)
-		lastExtractDate := backfillMap["last_extract_date"].(string)
+	var entries []backfillEntryModel
+	resp.Diagnostics.Append(plan.Backfills.ElementsAs(ctx, &entries, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-		// Find the data store index by key
+	if err := r.applyBackfills(jobID, entries); err != nil {
+		resp.Diagnostics.AddError("Error applying backfills", err.Error())
+		return
+	}
+
+	plan.ID = types.StringValue(generateBackfillID(jobID, entries))
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+// Read is a no-op: the BICC API never returns last_extract_date.
+func (r *biccJobBackfillResource) Read(_ context.Context, _ resource.ReadRequest, _ *resource.ReadResponse) {
+}
+
+func (r *biccJobBackfillResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan biccJobBackfillModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	var state biccJobBackfillModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	plan.ID = state.ID
+
+	jobID, err := strconv.ParseInt(plan.JobID.ValueString(), 10, 64)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid job_id", err.Error())
+		return
+	}
+
+	var entries []backfillEntryModel
+	resp.Diagnostics.Append(plan.Backfills.ElementsAs(ctx, &entries, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := r.applyBackfills(jobID, entries); err != nil {
+		resp.Diagnostics.AddError("Error applying backfills", err.Error())
+		return
+	}
+
+	plan.ID = types.StringValue(generateBackfillID(jobID, entries))
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+}
+
+// Delete is a no-op: destroying this resource does not reset the job's extract cursor.
+// Once the backfill run completes, BICC manages the cursor itself.
+func (r *biccJobBackfillResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
+}
+
+func (r *biccJobBackfillResource) applyBackfills(jobID int64, entries []backfillEntryModel) error {
+	job, err := r.client.GetJob(jobID)
+	if err != nil {
+		return fmt.Errorf("failed to get job: %w", err)
+	}
+
+	for _, entry := range entries {
+		dataStoreKey := entry.DataStoreKey.ValueString()
+		isoDate, err := convertToISO8601(entry.LastExtractDate.ValueString())
+		if err != nil {
+			return fmt.Errorf("invalid last_extract_date %q for data_store_key %q: %w", entry.LastExtractDate.ValueString(), dataStoreKey, err)
+		}
+
 		found := false
 		for i, ds := range job.DataStores {
 			if ds.DataStoreMeta.DataStoreKey == dataStoreKey {
-				// Convert date format if needed (YYYY-MM-DD -> ISO 8601)
-				isoDate := convertToISO8601(lastExtractDate)
 				job.DataStores[i].LastExtractDate = isoDate
 				found = true
 				break
 			}
 		}
-
 		if !found {
-			return diag.FromErr(fmt.Errorf("data_store_key '%s' not found in job %d", dataStoreKey, jobID))
+			return fmt.Errorf("data_store_key %q not found in job %d", dataStoreKey, jobID)
 		}
 	}
 
-	// Update the job with all backfills
-	_, err = c.CreateOrUpdateJob(job)
+	_, err = r.client.CreateOrUpdateJob(job)
+	return err
+}
+
+// convertToISO8601 parses a YYYY-MM-DD date (or an existing ISO 8601 string) and
+// returns it in "2006-01-02T15:04:05.000Z" format. Returns an error on invalid input.
+func convertToISO8601(dateStr string) (string, error) {
+	datePart := strings.Split(dateStr, "T")[0]
+	t, err := time.Parse("2006-01-02", datePart)
 	if err != nil {
-		return diag.FromErr(fmt.Errorf("failed to update job with backfill dates: %v", err))
+		return "", fmt.Errorf("expected YYYY-MM-DD format, got %q: %w", dateStr, err)
 	}
-
-	// Generate a stable ID based on job_id and data_store_keys
-	d.SetId(generateBackfillID(jobID, backfills))
-
-	return diags
+	return t.UTC().Format("2006-01-02T15:04:05.000Z"), nil
 }
 
-func resourceBICCJobBackfillRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	var diags diag.Diagnostics
-
-	// Since the API doesn't return last_extract_date, we simply preserve what's in config
-	// The resource ID confirms this backfill resource exists
-
-	return diags
-}
-
-func resourceBICCJobBackfillUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	c := meta.(*client.Client)
-	var diags diag.Diagnostics
-
-	if d.HasChange("backfills") {
-		jobID, err := strconv.ParseInt(d.Get("job_id").(string), 10, 64)
-		if err != nil {
-			return diag.FromErr(fmt.Errorf("invalid job_id: %v", err))
-		}
-
-		// Get the existing job
-		job, err := c.GetJob(jobID)
-		if err != nil {
-			return diag.FromErr(fmt.Errorf("failed to get job: %v", err))
-		}
-
-		_, new := d.GetChange("backfills")
-		newBackfills := new.(*schema.Set)
-
-		// Only apply new/changed backfills - never clear last_extract_date on removed entries
-		// as that would interfere with the main job's incremental cursor managed by BICC
-		for _, bf := range newBackfills.List() {
-			backfillMap := bf.(map[string]interface{})
-			dataStoreKey := backfillMap["data_store_key"].(string)
-			lastExtractDate := backfillMap["last_extract_date"].(string)
-
-			found := false
-			for i, ds := range job.DataStores {
-				if ds.DataStoreMeta.DataStoreKey == dataStoreKey {
-					isoDate := convertToISO8601(lastExtractDate)
-					job.DataStores[i].LastExtractDate = isoDate
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				return diag.FromErr(fmt.Errorf("data_store_key '%s' not found in job %d", dataStoreKey, jobID))
-			}
-		}
-
-		// Update the job
-		_, err = c.CreateOrUpdateJob(job)
-		if err != nil {
-			return diag.FromErr(fmt.Errorf("failed to update job with new backfill dates: %v", err))
-		}
-
-		// Update resource ID
-		d.SetId(generateBackfillID(jobID, newBackfills.List()))
-	}
-
-	return diags
-}
-
-func resourceBICCJobBackfillDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// No-op: deleting a backfill resource does not modify the main job.
-	// The backfill is an ad-hoc operation — once the job has run, last_extract_date
-	// is managed by BICC itself and should not be reset on destroy.
-	return nil
-}
-
-// Helper function to convert YYYY-MM-DD to ISO 8601 format
-func convertToISO8601(dateStr string) string {
-	// If already in ISO 8601 format, return as-is
-	if strings.Contains(dateStr, "T") {
-		return dateStr
-	}
-
-	// Parse YYYY-MM-DD format
-	t, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
-		// If parsing fails, return as-is and let API handle it
-		return dateStr
-	}
-
-	// Convert to ISO 8601 with UTC timezone
-	return t.Format("2006-01-02T15:04:05.000Z")
-}
-
-// Generate a stable resource ID based on job_id and data_store_keys
-func generateBackfillID(jobID int64, backfills []interface{}) string {
-	// Collect and sort data store keys for consistent ID generation
-	var keys []string
-	for _, bf := range backfills {
-		backfillMap := bf.(map[string]interface{})
-		keys = append(keys, backfillMap["data_store_key"].(string))
+func generateBackfillID(jobID int64, entries []backfillEntryModel) string {
+	keys := make([]string, len(entries))
+	for i, e := range entries {
+		keys[i] = e.DataStoreKey.ValueString()
 	}
 	sort.Strings(keys)
 
-	// Create a hash of the sorted keys
 	h := sha256.New()
 	h.Write([]byte(strings.Join(keys, "|")))
-	hash := fmt.Sprintf("%x", h.Sum(nil))[:16] // Use first 16 chars of hash
-
-	return fmt.Sprintf("%d:%s", jobID, hash)
+	return fmt.Sprintf("%d:%x", jobID, h.Sum(nil)[:8])
 }
