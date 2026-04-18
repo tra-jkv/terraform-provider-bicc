@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -108,7 +109,7 @@ func TestCreateOrUpdateJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		resp, err := c.CreateOrUpdateJob(&Job{Name: "test"})
+		resp, err := c.CreateOrUpdateJob(context.Background(), &Job{Name: "test"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -125,7 +126,7 @@ func TestCreateOrUpdateJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		_, err := c.CreateOrUpdateJob(&Job{Name: "test"})
+		_, err := c.CreateOrUpdateJob(context.Background(), &Job{Name: "test"})
 		if err == nil {
 			t.Fatal("expected error for non-200 status")
 		}
@@ -149,7 +150,7 @@ func TestGetJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		job, err := c.GetJob(1)
+		job, err := c.GetJob(context.Background(), 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -165,7 +166,7 @@ func TestGetJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		_, err := c.GetJob(999)
+		_, err := c.GetJob(context.Background(), 999)
 		if err == nil {
 			t.Fatal("expected error for 404")
 		}
@@ -187,7 +188,7 @@ func TestGetDataStoreColumns(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		cols, err := c.GetDataStoreColumns("SomeDS.Key")
+		cols, err := c.GetDataStoreColumns(context.Background(), "SomeDS.Key")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -203,7 +204,7 @@ func TestGetDataStoreColumns(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		_, err := c.GetDataStoreColumns("SomeDS.Key")
+		_, err := c.GetDataStoreColumns(context.Background(), "SomeDS.Key")
 		if err == nil {
 			t.Fatal("expected error for non-200 status")
 		}
@@ -225,7 +226,7 @@ func TestDeleteJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		if err := c.DeleteJob(1); err != nil {
+		if err := c.DeleteJob(context.Background(), 1); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -237,7 +238,7 @@ func TestDeleteJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		if err := c.DeleteJob(1); err != nil {
+		if err := c.DeleteJob(context.Background(), 1); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -250,7 +251,7 @@ func TestDeleteJob(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestClient(t, srv)
-		if err := c.DeleteJob(1); err == nil {
+		if err := c.DeleteJob(context.Background(), 1); err == nil {
 			t.Fatal("expected error for non-200/204 status")
 		}
 	})
@@ -274,7 +275,7 @@ func TestDoRequestSetsAuth(t *testing.T) {
 	c.Config.Username = "myuser"
 	c.Config.Password = "mypass"
 
-	_, _ = c.GetJob(1)
+	_, _ = c.GetJob(context.Background(), 1)
 
 	if gotAuth != "myuser:mypass" {
 		t.Errorf("basic auth: got %q, want %q", gotAuth, "myuser:mypass")

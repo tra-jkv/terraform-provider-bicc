@@ -119,7 +119,7 @@ func (r *biccJobBackfillResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	if err := r.applyBackfills(jobID, entries); err != nil {
+	if err := r.applyBackfills(ctx, jobID, entries); err != nil {
 		resp.Diagnostics.AddError("Error applying backfills", err.Error())
 		return
 	}
@@ -158,7 +158,7 @@ func (r *biccJobBackfillResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 
-	if err := r.applyBackfills(jobID, entries); err != nil {
+	if err := r.applyBackfills(ctx, jobID, entries); err != nil {
 		resp.Diagnostics.AddError("Error applying backfills", err.Error())
 		return
 	}
@@ -172,8 +172,8 @@ func (r *biccJobBackfillResource) Update(ctx context.Context, req resource.Updat
 func (r *biccJobBackfillResource) Delete(_ context.Context, _ resource.DeleteRequest, _ *resource.DeleteResponse) {
 }
 
-func (r *biccJobBackfillResource) applyBackfills(jobID int64, entries []backfillEntryModel) error {
-	job, err := r.client.GetJob(jobID)
+func (r *biccJobBackfillResource) applyBackfills(ctx context.Context, jobID int64, entries []backfillEntryModel) error {
+	job, err := r.client.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("failed to get job: %w", err)
 	}
@@ -198,7 +198,7 @@ func (r *biccJobBackfillResource) applyBackfills(jobID int64, entries []backfill
 		}
 	}
 
-	_, err = r.client.CreateOrUpdateJob(job)
+	_, err = r.client.CreateOrUpdateJob(ctx, job)
 	return err
 }
 

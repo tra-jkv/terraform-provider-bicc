@@ -270,7 +270,7 @@ func (r *biccJobResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	jobResp, err := r.client.CreateOrUpdateJob(job)
+	jobResp, err := r.client.CreateOrUpdateJob(ctx, job)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating job", err.Error())
 		return
@@ -293,7 +293,7 @@ func (r *biccJobResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	job, err := r.client.GetJob(jobID)
+	job, err := r.client.GetJob(ctx, jobID)
 	if err != nil {
 		resp.State.RemoveResource(ctx)
 		return
@@ -340,7 +340,7 @@ func (r *biccJobResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	_, err := r.client.CreateOrUpdateJob(job)
+	_, err := r.client.CreateOrUpdateJob(ctx, job)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating job", err.Error())
 		return
@@ -353,7 +353,7 @@ func (r *biccJobResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	refreshed, err := r.client.GetJob(jobID)
+	refreshed, err := r.client.GetJob(ctx, jobID)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading job after update", err.Error())
 		return
@@ -391,7 +391,7 @@ func (r *biccJobResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	if err := r.client.DeleteJob(jobID); err != nil {
+	if err := r.client.DeleteJob(ctx, jobID); err != nil {
 		resp.Diagnostics.AddError("Error deleting job", err.Error())
 	}
 }
@@ -406,7 +406,7 @@ func (r *biccJobResource) ImportState(ctx context.Context, req resource.ImportSt
 		return
 	}
 
-	job, err := r.client.GetJob(jobID)
+	job, err := r.client.GetJob(ctx, jobID)
 	if err != nil {
 		resp.Diagnostics.AddError("Error reading job during import", err.Error())
 		return
@@ -571,7 +571,7 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 		var columns []client.Column
 
 		if ds.AutoPopulateAllColumns.ValueBool() {
-			allCols, err := r.client.GetDataStoreColumns(ds.DataStoreKey.ValueString())
+			allCols, err := r.client.GetDataStoreColumns(ctx, ds.DataStoreKey.ValueString())
 			if err != nil {
 				columns = []client.Column{}
 			} else {
