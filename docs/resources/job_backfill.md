@@ -27,10 +27,12 @@ The BICC API accepts `last_extract_date` when updating a job but does not persis
 resource "bicc_job_backfill" "supplier_backfill" {
   job_id = bicc_job.suppliers.id
 
-  backfills {
-    data_store_key    = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
-    last_extract_date = "2024-01-01"
-  }
+  backfills = [
+    {
+      data_store_key    = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
+      last_extract_date = "2024-01-01"
+    }
+  ]
 }
 ```
 
@@ -40,20 +42,20 @@ resource "bicc_job_backfill" "supplier_backfill" {
 resource "bicc_job_backfill" "billing_orders_backfill" {
   job_id = bicc_job.billing_orders.id
 
-  backfills {
-    data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
-    last_extract_date = "2023-06-01"
-  }
-
-  backfills {
-    data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
-    last_extract_date = "2023-06-01"
-  }
-
-  backfills {
-    data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.FulfillLineExtractPVO"
-    last_extract_date = "2023-06-01"
-  }
+  backfills = [
+    {
+      data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
+      last_extract_date = "2023-06-01"
+    },
+    {
+      data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
+      last_extract_date = "2023-06-01"
+    },
+    {
+      data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.FulfillLineExtractPVO"
+      last_extract_date = "2023-06-01"
+    }
+  ]
 }
 ```
 
@@ -68,7 +70,7 @@ terraform destroy -target=bicc_job_backfill.billing_orders_backfill
 ### Required
 
 - `job_id` (String, Forces Replacement) - The ID of the BICC job to backfill.
-- `backfills` (Block Set, Min: 1) - Set of backfill configurations. See [backfills](#nested-schema-for-backfills) below.
+- `backfills` (Set of Object, Min: 1) - Set of backfill configurations. See [backfills](#nested-schema-for-backfills) below.
 
 ### Read-Only
 

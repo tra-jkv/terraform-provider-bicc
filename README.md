@@ -72,8 +72,8 @@ go build -o terraform-provider-bicc
 
 3. Install locally for development:
 ```bash
-mkdir -p ~/.terraform.d/plugins/registry.terraform.io/tra-jkv/bicc/1.0.0/darwin_arm64
-cp terraform-provider-bicc ~/.terraform.d/plugins/registry.terraform.io/tra-jkv/bicc/1.0.0/darwin_arm64/
+mkdir -p ~/.terraform.d/plugins/registry.terraform.io/tra-jkv/bicc/2.0.0/darwin_arm64
+cp terraform-provider-bicc ~/.terraform.d/plugins/registry.terraform.io/tra-jkv/bicc/2.0.0/darwin_arm64/
 ```
 
 Note: Adjust the path based on your OS and architecture (darwin_arm64, darwin_amd64, linux_amd64, etc.)
@@ -87,7 +87,7 @@ terraform {
   required_providers {
     bicc = {
       source = "tra-jkv/bicc"
-      version = "~> 1.0"
+      version = "~> 2.0"
     }
   }
 }
@@ -116,22 +116,27 @@ resource "bicc_job" "crm_extract" {
   name        = "CRM_FULL_EXTRACT_JOB"
   description = "Full extract job for CRM Analytics data"
 
-  data_stores {
-    data_store_key              = "CrmAnalyticsAM.PartiesAnalyticsAM.Person"
-    filters                     = "__DATASTORE__.CreationDate > '2024-01-01'"
-    is_silent_error             = true
-    is_effective_date_disabled  = false
+  data_stores = [
+    {
+      data_store_key             = "CrmAnalyticsAM.PartiesAnalyticsAM.Person"
+      filters                    = "__DATASTORE__.CreationDate > '2024-01-01'"
+      is_silent_error            = true
+      is_effective_date_disabled = false
 
-    columns {
-      name        = "PersonProfileId"
-      is_populate = true
-    }
+      columns = [
+        {
+          name        = "PersonProfileId"
+          is_populate = true
+        },
+        {
+          name        = "PartyId"
+          is_populate = true
+        }
+      ]
 
-    columns {
-      name        = "PartyId"
-      is_populate = true
+      column_overrides = []
     }
-  }
+  ]
 }
 ```
 
@@ -144,50 +149,59 @@ resource "bicc_job" "billing_orders" {
   name        = "BillingOrders"
   description = "Complete billing order lifecycle - headers, lines, fulfillment"
 
-  # Sales Order Headers
-  data_stores {
-    data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2024-01-01"
-    auto_populate_all_columns  = true
+  data_stores = [
+    # Sales Order Headers
+    {
+      data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2024-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
 
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true
+        }
+      ]
+    },
+    # Sales Order Lines
+    {
+      data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2024-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
+
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true
+        }
+      ]
+    },
+    # Fulfillment Lines
+    {
+      data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.FulfillLineExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2024-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
+
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true
+        }
+      ]
     }
-  }
-
-  # Sales Order Lines
-  data_stores {
-    data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2024-01-01"
-    auto_populate_all_columns  = true
-
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true
-    }
-  }
-
-  # Fulfillment Lines
-  data_stores {
-    data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.FulfillLineExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2024-01-01"
-    auto_populate_all_columns  = true
-
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true
-    }
-  }
+  ]
 }
 ```
 
@@ -204,19 +218,24 @@ resource "bicc_job" "supplier_incremental" {
   name        = "SupplierIncrementalExtract"
   description = "Incremental extract for Supplier data"
 
-  data_stores {
-    data_store_key             = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    
-    # Enable incremental extraction
-    use_union_for_incremental = true
-    initial_extract_date      = "2025-01-01"  # Optional: omit for all historical data
-    
-    # Optional: Enable chunking for large datasets
-    chunk_type          = "DATE"
-    chunk_date_seq_incr = 7  # Extract in 7-day chunks
-  }
+  data_stores = [
+    {
+      data_store_key             = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+
+      # Enable incremental extraction
+      use_union_for_incremental = true
+      initial_extract_date      = "2025-01-01" # Optional: omit for all historical data
+
+      # Optional: Enable chunking for large datasets
+      chunk_type          = "DATE"
+      chunk_date_seq_incr = 7 # Extract in 7-day chunks
+
+      columns          = []
+      column_overrides = []
+    }
+  ]
 }
 ```
 
@@ -243,30 +262,36 @@ resource "bicc_job" "supplier_incremental" {
   name        = "SupplierIncrementalExtract"
   description = "Incremental extract for Supplier data"
 
-  data_stores {
-    data_store_key             = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2025-01-01"
-    
-    auto_populate_all_columns = true
-    
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true  # Required for incremental
+  data_stores = [
+    {
+      data_store_key             = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2025-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
+
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true # Required for incremental
+        }
+      ]
     }
-  }
+  ]
 }
 
 # Backfill resource - create when needed, destroy when done
 resource "bicc_job_backfill" "supplier_backfill" {
   job_id = bicc_job.supplier_incremental.id
-  
-  backfills {
-    data_store_key    = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
-    last_extract_date = "2024-06-01"  # Backfill from this date
-  }
+
+  backfills = [
+    {
+      data_store_key    = "FscmTopModelAM.PrcExtractAM.PozBiccExtractAM.SupplierExtractPVO"
+      last_extract_date = "2024-06-01" # Backfill from this date
+    }
+  ]
 }
 ```
 
@@ -277,53 +302,60 @@ resource "bicc_job_backfill" "supplier_backfill" {
 resource "bicc_job" "billing_orders" {
   name        = "BillingOrders"
   description = "Complete billing order lifecycle"
-  
-  # Sales Order Headers
-  data_stores {
-    data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2024-01-01"
-    auto_populate_all_columns  = true
-    
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true
+
+  data_stores = [
+    # Sales Order Headers
+    {
+      data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2024-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
+
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true
+        }
+      ]
+    },
+    # Sales Order Lines
+    {
+      data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
+      is_silent_error            = true
+      is_effective_date_disabled = false
+      use_union_for_incremental  = true
+      initial_extract_date       = "2024-01-01"
+      auto_populate_all_columns  = true
+      columns                    = []
+
+      column_overrides = [
+        {
+          name                = "LastUpdateDate"
+          is_last_update_date = true
+        }
+      ]
     }
-  }
-  
-  # Sales Order Lines
-  data_stores {
-    data_store_key             = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
-    is_silent_error            = true
-    is_effective_date_disabled = false
-    use_union_for_incremental  = true
-    initial_extract_date       = "2024-01-01"
-    auto_populate_all_columns  = true
-    
-    column_overrides {
-      name                = "LastUpdateDate"
-      is_last_update_date = true
-    }
-  }
-  
-  # Add more related data stores as needed...
+    # Add more related data stores as needed...
+  ]
 }
 
 # Backfill multiple data stores in the job
 resource "bicc_job_backfill" "billing_orders_backfill" {
   job_id = bicc_job.billing_orders.id
-  
-  backfills {
-    data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
-    last_extract_date = "2023-06-01"
-  }
-  
-  backfills {
-    data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
-    last_extract_date = "2023-06-01"
-  }
+
+  backfills = [
+    {
+      data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.HeaderExtractPVO"
+      last_extract_date = "2023-06-01"
+    },
+    {
+      data_store_key    = "FscmTopModelAM.ScmExtractAM.DooBiccExtractAM.LineExtractPVO"
+      last_extract_date = "2023-06-01"
+    }
+  ]
 }
 ```
 
@@ -413,4 +445,4 @@ Tra Nguyen
 ## Acknowledgments
 
 - Oracle BICC Documentation
-- HashiCorp Terraform Plugin SDK
+- HashiCorp Terraform Plugin Framework
