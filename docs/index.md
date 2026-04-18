@@ -17,7 +17,7 @@ terraform {
   required_providers {
     bicc = {
       source  = "tra-jkv/bicc"
-      version = "~> 1.0"
+      version = "~> 2.0"
     }
   }
 }
