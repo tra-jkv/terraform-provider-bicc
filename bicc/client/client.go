@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -43,8 +44,15 @@ func NewClient(config *Config) *Client {
 	}
 }
 
-// doRequest executes an HTTP request with authentication
+// doRequest executes an HTTP request with authentication (context-free, for backwards compat).
 func (c *Client) doRequest(method, path string, body interface{}) (*http.Response, error) {
+	return c.doRequestWithContext(context.Background(), method, path, body)
+}
+
+// doRequestWithContext executes an HTTP request with authentication and a caller-supplied context.
+// Using the framework context means the HTTP call is cancelled when Terraform cancels the gRPC
+// call, and the gRPC keepalive is satisfied because the provider process is visibly active.
+func (c *Client) doRequestWithContext(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		jsonData, err := json.Marshal(body)
@@ -55,7 +63,7 @@ func (c *Client) doRequest(method, path string, body interface{}) (*http.Respons
 	}
 
 	url := fmt.Sprintf("%s%s", c.BaseURL, path)
-	req, err := http.NewRequest(method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}

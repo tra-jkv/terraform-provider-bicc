@@ -101,7 +101,7 @@ resource "bicc_job" "inventory" {
 ### Required
 
 - `name` (String) - Name of the BICC job.
-- `data_stores` (Block List, Min: 1) - List of data stores to extract. See [data_stores](#nested-schema-for-data_stores) below.
+- `data_stores` (Block Set, Min: 1) - Set of data stores to extract (order-independent). See [data_stores](#nested-schema-for-data_stores) below.
 
 ### Optional
 

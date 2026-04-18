@@ -1,12 +1,18 @@
 package main
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
+	"context"
+	"log"
+
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/tra-jkv/terraform-provider-bicc/bicc"
 )
 
 func main() {
-	plugin.Serve(&plugin.ServeOpts{
-		ProviderFunc: bicc.Provider,
+	err := providerserver.Serve(context.Background(), bicc.New, providerserver.ServeOpts{
+		Address: "registry.terraform.io/tra-jkv/bicc",
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }

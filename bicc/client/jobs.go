@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -116,11 +117,11 @@ func (jr *JobResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// CreateOrUpdateJob creates or updates a BICC job using the REST API
-func (c *Client) CreateOrUpdateJob(job *Job) (*JobResponse, error) {
+// CreateOrUpdateJob creates or updates a BICC job using the REST API.
+func (c *Client) CreateOrUpdateJob(ctx context.Context, job *Job) (*JobResponse, error) {
 	path := "/biacm/rest/meta/jobs/"
 
-	resp, err := c.doRequest(http.MethodPut, path, job)
+	resp, err := c.doRequestWithContext(ctx, http.MethodPut, path, job)
 	if err != nil {
 		return nil, fmt.Errorf("error creating/updating job: %v", err)
 	}
@@ -143,11 +144,11 @@ func (c *Client) CreateOrUpdateJob(job *Job) (*JobResponse, error) {
 	return &jobResp, nil
 }
 
-// GetJob retrieves a BICC job by ID
-func (c *Client) GetJob(jobID int64) (*Job, error) {
+// GetJob retrieves a BICC job by ID.
+func (c *Client) GetJob(ctx context.Context, jobID int64) (*Job, error) {
 	path := fmt.Sprintf("/biacm/rest/meta/jobs/%d", jobID)
 
-	resp, err := c.doRequest(http.MethodGet, path, nil)
+	resp, err := c.doRequestWithContext(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error getting job: %v", err)
 	}
@@ -174,11 +175,11 @@ func (c *Client) GetJob(jobID int64) (*Job, error) {
 	return &job, nil
 }
 
-// GetDataStoreColumns fetches all available columns for a data store
-func (c *Client) GetDataStoreColumns(dataStoreKey string) ([]Column, error) {
+// GetDataStoreColumns fetches all available columns for a data store.
+func (c *Client) GetDataStoreColumns(ctx context.Context, dataStoreKey string) ([]Column, error) {
 	path := fmt.Sprintf("/biacm/rest/meta/datastores/%s", dataStoreKey)
 
-	resp, err := c.doRequest(http.MethodGet, path, nil)
+	resp, err := c.doRequestWithContext(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error getting data store columns: %v", err)
 	}
@@ -203,11 +204,11 @@ func (c *Client) GetDataStoreColumns(dataStoreKey string) ([]Column, error) {
 	return dataStore.Columns, nil
 }
 
-// DeleteJob deletes a BICC job (note: BICC API may not support DELETE)
-func (c *Client) DeleteJob(jobID int64) error {
+// DeleteJob deletes a BICC job (note: BICC API may not support DELETE).
+func (c *Client) DeleteJob(ctx context.Context, jobID int64) error {
 	path := fmt.Sprintf("/biacm/rest/meta/jobs/%d", jobID)
 
-	resp, err := c.doRequest(http.MethodDelete, path, nil)
+	resp, err := c.doRequestWithContext(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return fmt.Errorf("error deleting job: %v", err)
 	}
