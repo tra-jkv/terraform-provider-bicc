@@ -750,9 +750,14 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 			diags.Append(d...)
 		}
 
+		filtersVal := types.StringNull()
+		if ds.DataStoreMeta.Filters != "" {
+			filtersVal = types.StringValue(ds.DataStoreMeta.Filters)
+		}
+
 		dsObj, d := types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
 			"data_store_key":             types.StringValue(key),
-			"filters":                    types.StringValue(ds.DataStoreMeta.Filters),
+			"filters":                    filtersVal,
 			"is_silent_error":            types.BoolValue(ds.DataStoreMeta.IsSilentError),
 			"is_effective_date_disabled": types.BoolValue(ds.DataStoreMeta.IsEffectiveDateDisabled),
 			"use_union_for_incremental":  types.BoolValue(ds.DataStoreMeta.UseUnionForIncremental),
