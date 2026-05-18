@@ -10,32 +10,32 @@ import (
 )
 
 // -------------------------------------------------------------------------
-// isListEmpty
+// isSetEmpty
 // -------------------------------------------------------------------------
 
-func TestIsListEmpty(t *testing.T) {
+func TestIsSetEmpty(t *testing.T) {
 	elemType := types.ObjectType{AttrTypes: columnAttrTypes}
 
-	t.Run("null list", func(t *testing.T) {
-		if !isListEmpty(types.ListNull(elemType)) {
-			t.Error("null list should be empty")
+	t.Run("null set", func(t *testing.T) {
+		if !isSetEmpty(types.SetNull(elemType)) {
+			t.Error("null set should be empty")
 		}
 	})
 
-	t.Run("unknown list", func(t *testing.T) {
-		if !isListEmpty(types.ListUnknown(elemType)) {
-			t.Error("unknown list should be empty")
+	t.Run("unknown set", func(t *testing.T) {
+		if !isSetEmpty(types.SetUnknown(elemType)) {
+			t.Error("unknown set should be empty")
 		}
 	})
 
-	t.Run("empty list", func(t *testing.T) {
-		l := types.ListValueMust(elemType, []attr.Value{})
-		if !isListEmpty(l) {
-			t.Error("zero-element list should be empty")
+	t.Run("empty set", func(t *testing.T) {
+		s := types.SetValueMust(elemType, []attr.Value{})
+		if !isSetEmpty(s) {
+			t.Error("zero-element set should be empty")
 		}
 	})
 
-	t.Run("non-empty list", func(t *testing.T) {
+	t.Run("non-empty set", func(t *testing.T) {
 		obj, _ := types.ObjectValue(columnAttrTypes, map[string]attr.Value{
 			"name":                    types.StringValue("C1"),
 			"is_populate":             types.BoolValue(true),
@@ -45,9 +45,9 @@ func TestIsListEmpty(t *testing.T) {
 			"is_effective_start_date": types.BoolValue(false),
 			"is_natural_key":          types.BoolValue(false),
 		})
-		l := types.ListValueMust(elemType, []attr.Value{obj})
-		if isListEmpty(l) {
-			t.Error("one-element list should not be empty")
+		s := types.SetValueMust(elemType, []attr.Value{obj})
+		if isSetEmpty(s) {
+			t.Error("one-element set should not be empty")
 		}
 	})
 }
@@ -137,7 +137,7 @@ func makeDataStoreSet(t *testing.T, keys ...string) types.Set {
 			"chunk_pk_seq_incr":          types.Int64Value(0),
 			"auto_populate_all_columns":  types.BoolValue(false),
 			"column_overrides":           types.ListValueMust(types.ObjectType{AttrTypes: columnOverrideAttrTypes}, []attr.Value{}),
-			"columns":                    types.ListValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{}),
+			"columns":                    types.SetValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{}),
 		})
 		if d.HasError() {
 			t.Fatalf("building test object: %v", d)
