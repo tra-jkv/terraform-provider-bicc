@@ -43,7 +43,7 @@ type dataStoreModel struct {
 	ChunkPkSeqIncr          types.Int64  `tfsdk:"chunk_pk_seq_incr"`
 	AutoPopulateAllColumns  types.Bool   `tfsdk:"auto_populate_all_columns"`
 	ColumnOverrides         types.List   `tfsdk:"column_overrides"`
-	Columns                 types.List   `tfsdk:"columns"`
+	Columns                 types.Set    `tfsdk:"columns"`
 }
 
 type columnOverrideModel struct {
@@ -99,7 +99,7 @@ var dataStoreAttrTypes = map[string]attr.Type{
 	"chunk_pk_seq_incr":          types.Int64Type,
 	"auto_populate_all_columns":  types.BoolType,
 	"column_overrides":           types.ListType{ElemType: types.ObjectType{AttrTypes: columnOverrideAttrTypes}},
-	"columns":                    types.ListType{ElemType: types.ObjectType{AttrTypes: columnAttrTypes}},
+	"columns":                    types.SetType{ElemType: types.ObjectType{AttrTypes: columnAttrTypes}},
 }
 
 type biccJobResource struct {
@@ -230,7 +230,7 @@ func (r *biccJobResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 								Attributes: columnOverrideAttrs,
 							},
 						},
-						"columns": schema.ListNestedAttribute{
+						"columns": schema.SetNestedAttribute{
 							Optional:    true,
 							Computed:    true,
 							Description: "Explicit column configuration. Not needed when auto_populate_all_columns is true.",
@@ -474,8 +474,8 @@ func (r *biccJobResource) ModifyPlan(ctx context.Context, req resource.ModifyPla
 		needsFix := hasState &&
 			planElem.AutoPopulateAllColumns.ValueBool() &&
 			!old.AutoPopulateAllColumns.ValueBool() &&
-			isListEmpty(planElem.Columns) &&
-			!isListEmpty(old.Columns)
+			isSetEmpty(planElem.Columns) &&
+			!isSetEmpty(old.Columns)
 
 		var obj attr.Value
 		var d diag.Diagnostics
@@ -547,8 +547,8 @@ func (r *biccJobResource) ModifyPlan(ctx context.Context, req resource.ModifyPla
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, plan)...)
 }
 
-func isListEmpty(l types.List) bool {
-	return l.IsNull() || l.IsUnknown() || len(l.Elements()) == 0
+func isSetEmpty(s types.Set) bool {
+	return s.IsNull() || s.IsUnknown() || len(s.Elements()) == 0
 }
 
 func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobModel) (*client.Job, diag.Diagnostics) {
@@ -575,10 +575,19 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 			if err != nil {
 				columns = []client.Column{}
 			} else {
-				columns = make([]client.Column, len(allCols))
-				for j, col := range allCols {
+				// Use only BICC's default-selected columns (isPopulate=true in meta),
+				// matching the BICC UI default selection behaviour. This avoids
+				// ORA-01792 on PVOs with >1000 columns (e.g. TransactionLineDistributionPVO
+				// has 2468 total but 227 default-selected).
+				var selected []client.Column
+				for _, col := range allCols {
+					if col.IsPopulate {
+						selected = append(selected, col)
+					}
+				}
+				columns = make([]client.Column, len(selected))
+				for j, col := range selected {
 					columns[j] = col.ToJobColumn()
-					columns[j].IsPopulate = true
 				}
 
 				var overrides []columnOverrideModel
@@ -729,7 +738,7 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 
 		// Omit columns from state when auto_populate is on to avoid drift from
 		// API-returned column lists that the config doesn't manage explicitly.
-		columnsVal := types.ListValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{})
+		columnsVal := types.SetValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{})
 		if !autoPopulate {
 			colObjects := make([]attr.Value, len(ds.DataStoreMeta.Columns))
 			for j, col := range ds.DataStoreMeta.Columns {
@@ -746,7 +755,7 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 				colObjects[j] = colObj
 			}
 			var d diag.Diagnostics
-			columnsVal, d = types.ListValue(types.ObjectType{AttrTypes: columnAttrTypes}, colObjects)
+			columnsVal, d = types.SetValue(types.ObjectType{AttrTypes: columnAttrTypes}, colObjects)
 			diags.Append(d...)
 		}
 
