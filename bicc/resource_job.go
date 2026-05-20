@@ -621,6 +621,14 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 						}
 					}
 				}
+				// Remove columns deselected via overrides (is_populate = false).
+				var kept []client.Column
+				for _, col := range columns {
+					if col.IsPopulate {
+						kept = append(kept, col)
+					}
+				}
+				columns = kept
 			}
 		} else {
 			var colModels []columnModel
