@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -12,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -170,19 +170,16 @@ func (r *biccJobResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 						"is_silent_error": schema.BoolAttribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     booldefault.StaticBool(false),
 							Description: "Continue extraction even if this data store fails.",
 						},
 						"is_effective_date_disabled": schema.BoolAttribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     booldefault.StaticBool(false),
 							Description: "Disable effective date filtering.",
 						},
 						"use_union_for_incremental": schema.BoolAttribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     booldefault.StaticBool(false),
 							Description: "Enable incremental extraction using UNION approach.",
 						},
 						"initial_extract_date": schema.StringAttribute{
@@ -201,25 +198,21 @@ func (r *biccJobResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 						"chunk_date_seq_incr": schema.Int64Attribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     int64default.StaticInt64(0),
 							Description: "Date sequence increment for chunking.",
 						},
 						"chunk_date_seq_min": schema.Int64Attribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     int64default.StaticInt64(0),
 							Description: "Minimum date sequence for chunking.",
 						},
 						"chunk_pk_seq_incr": schema.Int64Attribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     int64default.StaticInt64(0),
 							Description: "Primary key sequence increment for chunking.",
 						},
 						"auto_populate_all_columns": schema.BoolAttribute{
 							Optional:    true,
 							Computed:    true,
-							Default:     booldefault.StaticBool(false),
 							Description: "Automatically fetch and include all available columns from the data store. When true, define only column_overrides.",
 						},
 						"column_overrides": schema.ListNestedAttribute{
@@ -359,11 +352,12 @@ func (r *biccJobResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
+	// Build oldByKey from the plan (= config). Plan values are authoritative for all
+	// config-managed fields (auto_populate_all_columns, column_overrides, is_silent_error,
+	// use_union_for_incremental). BICC does not reliably round-trip these fields — some PVO
+	// types (e.g. BusinessUnitPVO, FinFun PVOs) always return explicit-column mode regardless
+	// of what was sent. Using plan as the source of truth prevents permanent state drift.
 	oldByKey, diags := buildOldDataStoreMap(ctx, plan.DataStores)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 
 	newDataStores, diags := r.buildDataStoresFromAPI(ctx, refreshed.DataStores, oldByKey)
 	resp.Diagnostics.Append(diags...)
@@ -425,12 +419,21 @@ func (r *biccJobResource) ImportState(ctx context.Context, req resource.ImportSt
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
-// ModifyPlan suppresses a spurious post-import drift. After import the provider writes
-// auto_populate_all_columns=false + full column list into state (no config context at
-// import time). On the next plan, config says auto_populate_all_columns=true + columns=[],
-// producing a diff with no real change. We detect this pattern and rewrite the plan element
-// to match state, making plan == state and suppressing the diff. The correct state is written
-// on the next apply via Read.
+// ModifyPlan suppresses spurious drift caused by two patterns:
+//
+//  1. Post-import drift: provider writes auto_populate_all_columns=false + full column
+//     list into state (no config context at import time). On the next plan, config says
+//     auto_populate_all_columns=true + columns=[], producing a diff with no real change.
+//     We detect this and rewrite the plan element to match state, suppressing the diff.
+//     The correct state is written on the next apply via Read.
+//
+//  2. BICC API round-trip drift: BICC does not persist auto_populate_all_columns,
+//     column_overrides, is_silent_error, or use_union_for_incremental reliably across
+//     all PVO types (e.g. BusinessUnitPVO always comes back as explicit-column mode;
+//     mixed-module payloads cause some PVOs to be silently ignored). After any apply
+//     where these flags drift in state, the next plan would show a spurious change.
+//     We suppress this by always using plan (= config) values for these fields and
+//     only using state for purely computed/API fields like columns (when not auto-populated).
 func (r *biccJobResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
 		return
@@ -464,55 +467,36 @@ func (r *biccJobResource) ModifyPlan(ctx context.Context, req resource.ModifyPla
 		return
 	}
 
-	modified := false
+	// ModifyPlan always rewrites plan elements for existing data stores (keyed by
+	// data_store_key) to merge state values for Computed fields. This is necessary
+	// because Terraform's SetNestedAttribute computes element hashes before ModifyPlan
+	// runs, and when Optional+Computed fields have null plan values (framework default
+	// when no prior state element matches), they produce a different hash from the state
+	// element — causing a spurious remove+add diff. By rewriting all plan elements here
+	// we ensure the plan hash always matches the state hash for unchanged elements.
+	//
+	// Rules for each field:
+	// - User-controlled config fields (is_silent_error, use_union_for_incremental,
+	//   is_effective_date_disabled, auto_populate_all_columns, column_overrides):
+	//   Use planElem value (= config value) UNLESS it is null/unknown, in which case
+	//   fall back to state to preserve Computed behaviour.
+	// - BICC API-only fields (columns, filters, chunk_*, initial_extract_date):
+	//   Use state value when auto_populate is true (columns managed by provider);
+	//   use plan value otherwise (user manages explicit column list).
+	// - Special suppression: if config wants auto_populate=true but BICC/state
+	//   persistently returns auto_populate=false (FinFun PVOs), suppress the diff
+	//   by pinning plan to state when nothing else changed.
 	newElements := make([]attr.Value, len(planDS))
+	anyModified := false
 	for i, planElem := range planDS {
 		key := planElem.DataStoreKey.ValueString()
 		old, hasState := stateByKey[key]
 
-		// Drift pattern: state has import-written explicit columns, plan wants auto-populate.
-		needsFix := hasState &&
-			planElem.AutoPopulateAllColumns.ValueBool() &&
-			!old.AutoPopulateAllColumns.ValueBool() &&
-			isSetEmpty(planElem.Columns) &&
-			!isSetEmpty(old.Columns)
-
 		var obj attr.Value
 		var d diag.Diagnostics
-		if needsFix {
-			obj, d = types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
-				"data_store_key":             old.DataStoreKey,
-				"filters":                    old.Filters,
-				"is_silent_error":            old.IsSilentError,
-				"is_effective_date_disabled": old.IsEffectiveDateDisabled,
-				"use_union_for_incremental":  old.UseUnionForIncremental,
-				"initial_extract_date":       old.InitialExtractDate,
-				"chunk_type":                 old.ChunkType,
-				"chunk_date_seq_incr":        old.ChunkDateSeqIncr,
-				"chunk_date_seq_min":         old.ChunkDateSeqMin,
-				"chunk_pk_seq_incr":          old.ChunkPkSeqIncr,
-				"auto_populate_all_columns":  old.AutoPopulateAllColumns,
-				"column_overrides":           old.ColumnOverrides,
-				"columns":                    old.Columns,
-			})
-			modified = true
-		} else if hasState {
-			obj, d = types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
-				"data_store_key":             old.DataStoreKey,
-				"filters":                    old.Filters,
-				"is_silent_error":            old.IsSilentError,
-				"is_effective_date_disabled": old.IsEffectiveDateDisabled,
-				"use_union_for_incremental":  old.UseUnionForIncremental,
-				"initial_extract_date":       old.InitialExtractDate,
-				"chunk_type":                 old.ChunkType,
-				"chunk_date_seq_incr":        old.ChunkDateSeqIncr,
-				"chunk_date_seq_min":         old.ChunkDateSeqMin,
-				"chunk_pk_seq_incr":          old.ChunkPkSeqIncr,
-				"auto_populate_all_columns":  planElem.AutoPopulateAllColumns,
-				"column_overrides":           planElem.ColumnOverrides,
-				"columns":                    old.Columns,
-			})
-		} else {
+
+		if !hasState {
+			// New data store — use plan values as-is.
 			obj, d = types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
 				"data_store_key":             planElem.DataStoreKey,
 				"filters":                    planElem.Filters,
@@ -528,12 +512,101 @@ func (r *biccJobResource) ModifyPlan(ctx context.Context, req resource.ModifyPla
 				"column_overrides":           planElem.ColumnOverrides,
 				"columns":                    planElem.Columns,
 			})
+			resp.Diagnostics.Append(d...)
+			newElements[i] = obj
+			continue
 		}
+
+		// Helper: use plan value if not null/unknown, else fall back to state.
+		boolVal := func(p, s types.Bool) types.Bool {
+			if !p.IsNull() && !p.IsUnknown() {
+				return p
+			}
+			return s
+		}
+		int64Val := func(p, s types.Int64) types.Int64 {
+			if !p.IsNull() && !p.IsUnknown() {
+				return p
+			}
+			return s
+		}
+		strVal := func(p, s types.String) types.String {
+			if !p.IsNull() && !p.IsUnknown() {
+				return p
+			}
+			return s
+		}
+
+		isSilentError := boolVal(planElem.IsSilentError, old.IsSilentError)
+		isEffectiveDateDisabled := boolVal(planElem.IsEffectiveDateDisabled, old.IsEffectiveDateDisabled)
+		useUnion := boolVal(planElem.UseUnionForIncremental, old.UseUnionForIncremental)
+		autoPopulate := boolVal(planElem.AutoPopulateAllColumns, old.AutoPopulateAllColumns)
+		filters := strVal(planElem.Filters, old.Filters)
+		initialExtractDate := strVal(planElem.InitialExtractDate, old.InitialExtractDate)
+		chunkType := strVal(planElem.ChunkType, old.ChunkType)
+		chunkDateSeqIncr := int64Val(planElem.ChunkDateSeqIncr, old.ChunkDateSeqIncr)
+		chunkDateSeqMin := int64Val(planElem.ChunkDateSeqMin, old.ChunkDateSeqMin)
+		chunkPkSeqIncr := int64Val(planElem.ChunkPkSeqIncr, old.ChunkPkSeqIncr)
+
+		columnOverrides := planElem.ColumnOverrides
+		if columnOverrides.IsNull() || columnOverrides.IsUnknown() {
+			columnOverrides = old.ColumnOverrides
+		}
+
+		// Special suppression: config wants auto_populate=true but state has auto_populate=false.
+		// This happens in two cases:
+		//   1. BICC persistently returns explicit-column mode for some PVO types (e.g. FinFun PVOs)
+		//      even after a successful apply — state has auto=false, columns=[].
+		//   2. Post-apply state corruption where BICC wrote back explicit columns for a PVO
+		//      that was configured as auto-populate — state has auto=false, columns=[many].
+		// In both cases, suppress by pinning the plan to state (auto=false, carry state columns).
+		// The BICC configuration is already correct; this is a provider-state artifact.
+		// Suppress auto_populate drift: config wants true but state/BICC persistently
+		// returns false (FinFun PVOs, explicit-column-mode PVOs). Suppress regardless
+		// of column_overrides changes — we pin auto to state's false and carry state's
+		// columns, but still propagate column_overrides updates to the plan.
+		autoPopulateStateDrift := autoPopulate.ValueBool() &&
+			!old.AutoPopulateAllColumns.ValueBool() &&
+			isSetEmpty(planElem.Columns)
+
+		if autoPopulateStateDrift {
+			autoPopulate = old.AutoPopulateAllColumns // pin to false (state value)
+			columnOverrides = old.ColumnOverrides     // pin column_overrides to state too (hash must match)
+		}
+
+		// Columns: use state if auto_populate (columns managed by provider or BICC-internal),
+		// else use plan (user manages explicit list). Also handle post-import case where
+		// state has explicit columns but plan has empty (auto_populate=true mode).
+		columnsVal := planElem.Columns
+		if autoPopulate.ValueBool() && isSetEmpty(planElem.Columns) {
+			// auto mode: always use empty (columns not tracked in state)
+			columnsVal = types.SetValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{})
+		} else if !autoPopulate.ValueBool() && isSetEmpty(planElem.Columns) && !isSetEmpty(old.Columns) {
+			// post-import: carry forward explicit state columns
+			columnsVal = old.Columns
+		}
+
+		obj, d = types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
+			"data_store_key":             planElem.DataStoreKey,
+			"filters":                    filters,
+			"is_silent_error":            isSilentError,
+			"is_effective_date_disabled": isEffectiveDateDisabled,
+			"use_union_for_incremental":  useUnion,
+			"initial_extract_date":       initialExtractDate,
+			"chunk_type":                 chunkType,
+			"chunk_date_seq_incr":        chunkDateSeqIncr,
+			"chunk_date_seq_min":         chunkDateSeqMin,
+			"chunk_pk_seq_incr":          chunkPkSeqIncr,
+			"auto_populate_all_columns":  autoPopulate,
+			"column_overrides":           columnOverrides,
+			"columns":                    columnsVal,
+		})
 		resp.Diagnostics.Append(d...)
 		newElements[i] = obj
+		anyModified = true // always mark modified when hasState so we always rewrite
 	}
 
-	if resp.Diagnostics.HasError() || !modified {
+	if resp.Diagnostics.HasError() || !anyModified {
 		return
 	}
 
@@ -566,12 +639,38 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 		return nil, diags
 	}
 
+	// Prefetch all data store column metadata in parallel for auto_populate data stores.
+	// GetDataStoreColumns can take 5-10s per call on some BICC instances; parallelising
+	// reduces total latency from O(n*latency) to O(max_latency).
+	type colResult struct {
+		cols []client.Column
+		err  error
+	}
+	prefetch := make(map[string]colResult, len(dsModels))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ds := range dsModels {
+		if ds.AutoPopulateAllColumns.ValueBool() {
+			key := ds.DataStoreKey.ValueString()
+			wg.Add(1)
+			go func(k string) {
+				defer wg.Done()
+				cols, err := r.client.GetDataStoreColumns(ctx, k)
+				mu.Lock()
+				prefetch[k] = colResult{cols: cols, err: err}
+				mu.Unlock()
+			}(key)
+		}
+	}
+	wg.Wait()
+
 	dataStores := make([]client.DataStore, len(dsModels))
 	for i, ds := range dsModels {
 		var columns []client.Column
 
 		if ds.AutoPopulateAllColumns.ValueBool() {
-			allCols, err := r.client.GetDataStoreColumns(ctx, ds.DataStoreKey.ValueString())
+			result := prefetch[ds.DataStoreKey.ValueString()]
+			allCols, err := result.cols, result.err
 			if err != nil {
 				columns = []client.Column{}
 			} else {
@@ -746,8 +845,15 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 
 		// Omit columns from state when auto_populate is on to avoid drift from
 		// API-returned column lists that the config doesn't manage explicitly.
+		// Also skip building columns when prior state already had an empty column set:
+		// this avoids the O(n) types.SetValue hashing cost for large-column PVOs (e.g.
+		// AR jobs with 900+ columns) where ModifyPlan will discard the list anyway.
+		oldHadColumns := false
+		if old, exists := oldByKey[key]; exists {
+			oldHadColumns = !isSetEmpty(old.Columns)
+		}
 		columnsVal := types.SetValueMust(types.ObjectType{AttrTypes: columnAttrTypes}, []attr.Value{})
-		if !autoPopulate {
+		if !autoPopulate && oldHadColumns {
 			colObjects := make([]attr.Value, len(ds.DataStoreMeta.Columns))
 			for j, col := range ds.DataStoreMeta.Columns {
 				colObj, d := types.ObjectValue(columnAttrTypes, map[string]attr.Value{
@@ -772,12 +878,32 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 			filtersVal = types.StringValue(ds.DataStoreMeta.Filters)
 		}
 
+		// For boolean flags that the config explicitly manages (silent_error, union),
+		// prefer the plan/state value over the raw API value. The API can return stale
+		// values if a previous apply used wrong credentials or BICC silently ignored
+		// the update (e.g. mixed-module payloads). Trusting the API unconditionally
+		// causes permanent drift whenever BICC's stored value lags behind the config.
+		isSilentError := ds.DataStoreMeta.IsSilentError
+		useUnion := ds.DataStoreMeta.UseUnionForIncremental
+		isEffectiveDateDisabled := ds.DataStoreMeta.IsEffectiveDateDisabled
+		if old, exists := oldByKey[key]; exists {
+			if !old.IsSilentError.IsNull() && !old.IsSilentError.IsUnknown() {
+				isSilentError = old.IsSilentError.ValueBool()
+			}
+			if !old.UseUnionForIncremental.IsNull() && !old.UseUnionForIncremental.IsUnknown() {
+				useUnion = old.UseUnionForIncremental.ValueBool()
+			}
+			if !old.IsEffectiveDateDisabled.IsNull() && !old.IsEffectiveDateDisabled.IsUnknown() {
+				isEffectiveDateDisabled = old.IsEffectiveDateDisabled.ValueBool()
+			}
+		}
+
 		dsObj, d := types.ObjectValue(dataStoreAttrTypes, map[string]attr.Value{
 			"data_store_key":             types.StringValue(key),
 			"filters":                    filtersVal,
-			"is_silent_error":            types.BoolValue(ds.DataStoreMeta.IsSilentError),
-			"is_effective_date_disabled": types.BoolValue(ds.DataStoreMeta.IsEffectiveDateDisabled),
-			"use_union_for_incremental":  types.BoolValue(ds.DataStoreMeta.UseUnionForIncremental),
+			"is_silent_error":            types.BoolValue(isSilentError),
+			"is_effective_date_disabled": types.BoolValue(isEffectiveDateDisabled),
+			"use_union_for_incremental":  types.BoolValue(useUnion),
 			"initial_extract_date":       initialExtractDate,
 			"chunk_type":                 chunkType,
 			"chunk_date_seq_incr":        types.Int64Value(int64(ds.DataStoreMeta.ChunkDateSeqIncr)),
