@@ -332,7 +332,9 @@ func (r *biccJobResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	state.Name = types.StringValue(job.Name)
+	// Do NOT overwrite state.Name from job.Name — the BICC API ignores the name field on
+	// update and always returns the original job name. Preserving state.Name (which holds
+	// the value from config) prevents perpetual drift after a rename.
 	state.Description = types.StringValue(job.Description)
 	state.DataStores = newDataStores
 
@@ -391,7 +393,9 @@ func (r *biccJobResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	plan.Name = types.StringValue(refreshed.Name)
+	// BICC API ignores name on update and returns the original name — keep plan (config) as
+	// authoritative so state matches config and avoids "inconsistent result" errors.
+	// plan.Name already holds the config value; do not overwrite it from refreshed.Name.
 	plan.Description = types.StringValue(refreshed.Description)
 	plan.DataStores = newDataStores
 
