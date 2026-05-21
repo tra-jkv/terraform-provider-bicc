@@ -708,9 +708,12 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 				// matching the BICC UI default selection behaviour. This avoids
 				// ORA-01792 on PVOs with >1000 columns (e.g. TransactionLineDistributionPVO
 				// has 2468 total but 227 default-selected).
+				// Primary key columns are always included regardless of isPopulate in
+				// schema metadata — BICC may mark some PKs as isPopulate=false but they
+				// are required for joins and deduplication downstream.
 				var selected []client.Column
 				for _, col := range allCols {
-					if col.IsPopulate {
+					if col.IsPopulate || col.IsPrimaryKey {
 						selected = append(selected, col)
 					}
 				}
