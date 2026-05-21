@@ -270,6 +270,32 @@ func (r *biccJobResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	plan.ID = types.StringValue(strconv.FormatInt(jobResp.ID, 10))
+
+	// Re-read from the API so all Computed fields (is_effective_date_disabled,
+	// initial_extract_date, columns, etc.) are populated in state. Without this,
+	// Optional+Computed fields not set in config remain unknown after Create.
+	refreshed, err := r.client.GetJob(ctx, jobResp.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading job after create", err.Error())
+		return
+	}
+
+	oldByKey, diags := buildOldDataStoreMap(ctx, plan.DataStores)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	newDataStores, diags := r.buildDataStoresFromAPI(ctx, refreshed.DataStores, oldByKey)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	plan.Name = types.StringValue(refreshed.Name)
+	plan.Description = types.StringValue(refreshed.Description)
+	plan.DataStores = newDataStores
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
