@@ -130,7 +130,7 @@ resource "bicc_job" "inventory" {
       auto_populate_all_columns  = true
       filters                    = null
       initial_extract_date       = "2024-01-01"
-      chunk_type                 = "DATE"
+      chunk_type                 = "DateSeqIncr"
       chunk_date_seq_incr        = 7
       chunk_date_seq_min         = 0
       chunk_pk_seq_incr          = 0
@@ -224,7 +224,7 @@ After importing, run `terraform plan`. If your config uses `auto_populate_all_co
 - `is_effective_date_disabled` (Boolean) - If `true`, disable effective date filtering. Default: `false`.
 - `use_union_for_incremental` (Boolean) - If `true`, enable incremental extraction using the UNION approach. Default: `false`.
 - `initial_extract_date` (String) - Initial extract date for incremental extraction. Format: `YYYY-MM-DD`. Set to `null` to extract all historical data on the first run.
-- `chunk_type` (String) - Chunking type for large extractions. Valid values: `DATE`, `SEQUENCE`. Set to `null` if unused.
+- `chunk_type` (String) - Chunking type for large extractions. Use `DateSeqIncr` to chunk by creation date (requires at least one column marked `is_creation_date = true`). Set to `null` if unused.
 - `chunk_date_seq_incr` (Number) - Date sequence increment for chunking (e.g., `7` for weekly chunks). Default: `0`.
 - `chunk_date_seq_min` (Number) - Minimum date sequence for chunking. Default: `0`.
 - `chunk_pk_seq_incr` (Number) - Primary key sequence increment for chunking. Default: `0`.

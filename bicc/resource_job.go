@@ -193,7 +193,7 @@ func (r *biccJobResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 						"chunk_type": schema.StringAttribute{
 							Optional:    true,
 							Computed:    true,
-							Description: "Chunking type for large extractions (e.g., DATE, SEQUENCE).",
+							Description: "Chunking type for large extractions. Use 'DateSeqIncr' to chunk by creation date (requires at least one column marked is_creation_date=true).",
 						},
 						"chunk_date_seq_incr": schema.Int64Attribute{
 							Optional:    true,
