@@ -850,6 +850,17 @@ func buildOldDataStoreMap(ctx context.Context, set types.Set) (map[string]dataSt
 func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []client.DataStore, oldByKey map[string]dataStoreModel) (types.Set, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
+	// Only include data stores that are present in the config (oldByKey).
+	// The BICC API may silently re-add data stores that were removed — we must
+	// filter them out here so state stays in sync with config, not with the API.
+	filtered := make([]client.DataStore, 0, len(apiDS))
+	for _, ds := range apiDS {
+		if _, exists := oldByKey[ds.DataStoreMeta.DataStoreKey]; exists {
+			filtered = append(filtered, ds)
+		}
+	}
+	apiDS = filtered
+
 	dsObjects := make([]attr.Value, len(apiDS))
 
 	for i, ds := range apiDS {
@@ -873,6 +884,13 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 		if ds.DataStoreMeta.ChunkType != nil {
 			if ct, ok := ds.DataStoreMeta.ChunkType.(string); ok && ct != "" {
 				chunkType = types.StringValue(ct)
+			}
+		}
+		// Prefer plan/state chunk_type if the API ignored the update (prod BICC
+		// silently discards chunkType for certain PVOs).
+		if old, exists := oldByKey[key]; exists {
+			if !old.ChunkType.IsNull() && !old.ChunkType.IsUnknown() {
+				chunkType = old.ChunkType
 			}
 		}
 
