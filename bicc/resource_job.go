@@ -270,6 +270,32 @@ func (r *biccJobResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	plan.ID = types.StringValue(strconv.FormatInt(jobResp.ID, 10))
+
+	// Re-read from the API so all Computed fields (is_effective_date_disabled,
+	// initial_extract_date, columns, etc.) are populated in state. Without this,
+	// Optional+Computed fields not set in config remain unknown after Create.
+	refreshed, err := r.client.GetJob(ctx, jobResp.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading job after create", err.Error())
+		return
+	}
+
+	oldByKey, diags := buildOldDataStoreMap(ctx, plan.DataStores)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	newDataStores, diags := r.buildDataStoresFromAPI(ctx, refreshed.DataStores, oldByKey)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	plan.Name = types.StringValue(refreshed.Name)
+	plan.Description = types.StringValue(refreshed.Description)
+	plan.DataStores = newDataStores
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -306,7 +332,9 @@ func (r *biccJobResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	state.Name = types.StringValue(job.Name)
+	// Do NOT overwrite state.Name from job.Name — the BICC API ignores the name field on
+	// update and always returns the original job name. Preserving state.Name (which holds
+	// the value from config) prevents perpetual drift after a rename.
 	state.Description = types.StringValue(job.Description)
 	state.DataStores = newDataStores
 
@@ -365,7 +393,9 @@ func (r *biccJobResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	plan.Name = types.StringValue(refreshed.Name)
+	// BICC API ignores name on update and returns the original name — keep plan (config) as
+	// authoritative so state matches config and avoids "inconsistent result" errors.
+	// plan.Name already holds the config value; do not overwrite it from refreshed.Name.
 	plan.Description = types.StringValue(refreshed.Description)
 	plan.DataStores = newDataStores
 
@@ -678,9 +708,12 @@ func (r *biccJobResource) buildJobFromModel(ctx context.Context, model biccJobMo
 				// matching the BICC UI default selection behaviour. This avoids
 				// ORA-01792 on PVOs with >1000 columns (e.g. TransactionLineDistributionPVO
 				// has 2468 total but 227 default-selected).
+				// Primary key columns are always included regardless of isPopulate in
+				// schema metadata — BICC may mark some PKs as isPopulate=false but they
+				// are required for joins and deduplication downstream.
 				var selected []client.Column
 				for _, col := range allCols {
-					if col.IsPopulate {
+					if col.IsPopulate || col.IsPrimaryKey {
 						selected = append(selected, col)
 					}
 				}
@@ -817,6 +850,17 @@ func buildOldDataStoreMap(ctx context.Context, set types.Set) (map[string]dataSt
 func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []client.DataStore, oldByKey map[string]dataStoreModel) (types.Set, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
+	// Only include data stores that are present in the config (oldByKey).
+	// The BICC API may silently re-add data stores that were removed — we must
+	// filter them out here so state stays in sync with config, not with the API.
+	filtered := make([]client.DataStore, 0, len(apiDS))
+	for _, ds := range apiDS {
+		if _, exists := oldByKey[ds.DataStoreMeta.DataStoreKey]; exists {
+			filtered = append(filtered, ds)
+		}
+	}
+	apiDS = filtered
+
 	dsObjects := make([]attr.Value, len(apiDS))
 
 	for i, ds := range apiDS {
@@ -840,6 +884,13 @@ func (r *biccJobResource) buildDataStoresFromAPI(ctx context.Context, apiDS []cl
 		if ds.DataStoreMeta.ChunkType != nil {
 			if ct, ok := ds.DataStoreMeta.ChunkType.(string); ok && ct != "" {
 				chunkType = types.StringValue(ct)
+			}
+		}
+		// Prefer plan/state chunk_type if the API ignored the update (prod BICC
+		// silently discards chunkType for certain PVOs).
+		if old, exists := oldByKey[key]; exists {
+			if !old.ChunkType.IsNull() && !old.ChunkType.IsUnknown() {
+				chunkType = old.ChunkType
 			}
 		}
 
