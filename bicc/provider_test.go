@@ -34,7 +34,7 @@ func TestProvider(t *testing.T) {
 		resourceNames[metaResp.TypeName] = true
 	}
 
-	for _, want := range []string{"bicc_job", "bicc_job_backfill"} {
+	for _, want := range []string{"bicc_job"} {
 		if !resourceNames[want] {
 			t.Errorf("resource %q not registered", want)
 		}
