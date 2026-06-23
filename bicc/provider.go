@@ -121,7 +121,6 @@ func (p *biccProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 func (p *biccProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewBICCJobResource,
-		NewBICCJobBackfillResource,
 	}
 }
 
